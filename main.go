@@ -46,10 +46,12 @@ type Config struct {
 	RecoverWait   int    `json:"recover_wait_sec"`   // 主网稳定多久后回切（秒）
 	PingTarget    string `json:"ping_target"`        // ping 探测目标（建议国内可达，如 223.5.5.5）
 	HTTPTarget    string `json:"http_target"`        // HTTP 探测目标（如 http://1.1.1.1）
+	Lang          string `json:"lang"`               // 界面语言：zh / en
 }
 
 func defaultConfig() Config {
 	return Config{
+		Lang:          systemLanguage(),
 		CheckInterval: 5,
 		FailThreshold: 3,
 		RecoverWait:   60,
@@ -159,6 +161,13 @@ func onlineState(ok bool) int {
 	return -1
 }
 
+// currentStatus 取当前界面状态快照（切换语言后需要用新语言重画一遍横幅）。
+func currentStatus() uiStatus {
+	uiMu.Lock()
+	defer uiMu.Unlock()
+	return lastUI
+}
+
 // ---------- 顶部状态横幅 ----------
 
 var (
@@ -179,9 +188,9 @@ type statusBanner struct {
 func newStatusBanner() (*statusBanner, fyne.CanvasObject) {
 	b := &statusBanner{
 		bg:    canvas.NewRectangle(colUnknown),
-		title: canvas.NewText("等待检测…", color.White),
-		ssid:  canvas.NewText("当前 Wi-Fi 未知", color.White),
-		conn:  canvas.NewText("检测中", color.White),
+		title: canvas.NewText(T("banner.waiting"), color.White),
+		ssid:  canvas.NewText(T("banner.ssidUnknown"), color.White),
+		conn:  canvas.NewText(T("banner.checking"), color.White),
 		note:  canvas.NewText("", color.White),
 	}
 	b.bg.CornerRadius = 12
@@ -218,28 +227,28 @@ func (b *statusBanner) apply(s uiStatus) {
 	switch s.Mode {
 	case "main":
 		b.bg.FillColor = colMain
-		b.title.Text = "主网运行中"
+		b.title.Text = T("banner.main")
 	case "backup":
 		b.bg.FillColor = colBackup
-		b.title.Text = "备用网运行中"
+		b.title.Text = T("banner.backup")
 	default:
 		b.bg.FillColor = colUnknown
-		b.title.Text = "等待检测…"
+		b.title.Text = T("banner.waiting")
 	}
 	if s.SSID != "" {
-		b.ssid.Text = "当前 Wi-Fi   " + s.SSID
+		b.ssid.Text = T("banner.ssid", s.SSID)
 	} else {
-		b.ssid.Text = "当前 Wi-Fi   未知（可能未连接或读取受限）"
+		b.ssid.Text = T("banner.ssidUnknown")
 	}
 	switch s.Online {
 	case 1:
-		b.conn.Text = "网络正常"
+		b.conn.Text = T("banner.online")
 		b.dot.FillColor = color.NRGBA{R: 0xD9, G: 0xFB, B: 0xE3, A: 0xFF}
 	case -1:
-		b.conn.Text = "网络异常"
+		b.conn.Text = T("banner.offline")
 		b.dot.FillColor = color.NRGBA{R: 0xFF, G: 0xE1, B: 0xB8, A: 0xFF}
 	default:
-		b.conn.Text = "检测中"
+		b.conn.Text = T("banner.checking")
 		b.dot.FillColor = color.NRGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xCC}
 	}
 	b.note.Text = s.Note
@@ -300,7 +309,7 @@ type wifiController interface {
 // 单次 30s：内部要等到实际关联成功（最多 20s）才算完成，不能给太短的预算。
 func connectWithRetry(c wifiController, ssid string, retries int) error {
 	if ssid == "" {
-		return fmt.Errorf("SSID 为空，无法连接")
+		return Terr("err.emptySSID")
 	}
 	var lastErr error
 	for i := 0; i <= retries; i++ {
@@ -311,12 +320,12 @@ func connectWithRetry(c wifiController, ssid string, retries int) error {
 			return nil
 		}
 		lastErr = err
-		logf("连接 %q 第 %d 次失败: %v", ssid, i+1, err)
+		logf("%s", T("log.connectFail", ssid, i+1, err))
 		if i < retries {
 			time.Sleep(time.Second)
 		}
 	}
-	return fmt.Errorf("连接 %q 重试 %d 次后仍失败: %w", ssid, retries, lastErr)
+	return Terr("err.giveUp", ssid, retries, lastErr)
 }
 
 var ssidRe = regexp.MustCompile(`(?m)^\s*SSID\s*:\s*(.*?)\s*$`)
@@ -457,12 +466,12 @@ func scanSSIDs() ([]string, error) {
 			}
 		}
 	default:
-		return nil, fmt.Errorf("不支持的平台: %s", runtime.GOOS)
+		return nil, Terr("err.unsupported", runtime.GOOS)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("扫描失败: %w", err)
+		return nil, Terr("err.scan", err)
 	}
-	return nil, fmt.Errorf("未发现可用网络（可能 Wi‑Fi 已关闭或无可见热点）")
+	return nil, Terr("err.noNetwork")
 }
 
 // Windows: netsh（netsh 被位置权限限制时，用 PowerShell Get-NetConnectionProfile 兜底）
@@ -503,7 +512,7 @@ func (w *winWifi) CurrentSSID() (string, error) {
 		w.netshQuietUntil = time.Now().Add(netshQuietPeriod)
 		w.mu.Unlock()
 		if firstTime {
-			logf("netsh 读不到当前网络（多为位置服务被系统限制），改用 PowerShell 兜底；%d 秒内不再重复调 netsh", int(netshQuietPeriod.Seconds()))
+			logf("%s", T("log.netshFallback", int(netshQuietPeriod.Seconds())))
 		}
 	}
 
@@ -514,7 +523,7 @@ func (w *winWifi) CurrentSSID() (string, error) {
 		if w.lastSSID != "" {
 			return w.lastSSID, nil
 		}
-		return "", fmt.Errorf("当前无 Wi‑Fi 连接（读取受限：未关联或系统限制）")
+		return "", Terr("err.noSSIDWin")
 	}
 	ssid := currentSSIDViaPowerShell()
 	w.lastSSID = ssid
@@ -522,18 +531,18 @@ func (w *winWifi) CurrentSSID() (string, error) {
 	if ssid != "" {
 		return ssid, nil
 	}
-	return "", fmt.Errorf("当前无 Wi‑Fi 连接（读取受限：未关联或系统限制）")
+	return "", Terr("err.noSSIDWin")
 }
 
 func (w *winWifi) Connect(ctx context.Context, ssid string) error {
 	// 首选：原生 WlanConnect —— 按 profile 直连，不做可用网络枚举，不依赖位置服务。
 	// 这是目前唯一能在「位置服务关闭」时跨网络切换的路径（netsh 做不到）。
 	if err := wlanAPIConnect(ssid); err != nil {
-		logf("原生 WlanConnect 失败: %v，回退 netsh", err)
+		logf("%s", T("log.wlanNative", err))
 		out, nerr := hideWindow(exec.CommandContext(ctx, "netsh", "wlan", "connect", "name="+ssid)).CombinedOutput()
 		if nerr != nil {
 			if msg := condenseOutput(string(out), 3); msg != "" {
-				return fmt.Errorf("系统拒绝连接：%s", msg)
+				return Terr("err.refused", msg)
 			}
 			return nerr
 		}
@@ -559,14 +568,13 @@ func (w *winWifi) waitAssociated(ctx context.Context, ssid string, timeout time.
 		if time.Now().After(deadline) {
 			shown := cur
 			if shown == "" {
-				shown = "未连接"
+				shown = T("err.notConnected")
 			}
-			return fmt.Errorf("已提交连接请求，但 %d 秒内未关联到 %q（当前：%s）",
-				int(timeout.Seconds()), ssid, shown)
+			return Terr("err.noAssoc", ssid, int(timeout.Seconds()), shown)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("等待关联超时（目标 %q）", ssid)
+			return Terr("err.assocCtx", ssid)
 		case <-time.After(2 * time.Second):
 		}
 	}
@@ -600,7 +608,7 @@ func (m *macWifi) CurrentSSID() (string, error) {
 	out, err := runCapture("/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-I")
 	ssid := parseSSID(out)
 	if ssid == "" {
-		return "", fmt.Errorf("未获取到 SSID（airport 输出: %q，错误: %v）", strings.TrimSpace(out), err)
+		return "", Terr("err.noSSIDMac", strings.TrimSpace(out), err)
 	}
 	return ssid, nil
 }
@@ -659,7 +667,7 @@ func monitorLoop() {
 			return
 		}
 		if paused {
-			pushStatus(func(s *uiStatus) { s.Note = "已暂停自动切换（仍持续探测）" })
+			pushStatus(func(s *uiStatus) { s.Note = T("note.paused") })
 			continue
 		}
 		checkOnce()
@@ -674,7 +682,7 @@ func checkOnce() {
 	ok := httpOK(cfg.HTTPTarget) || pingOK(cfg.PingTarget)
 	currentSSID, err := ctrl.CurrentSSID()
 	if err != nil {
-		msg := fmt.Sprintf("获取 SSID 出错: %v", err)
+		msg := T("log.ssidErr", err)
 		if msg != lastSSIDErrMsg { // 去重，仅在状态变化时记一条
 			logf("%s", msg)
 			lastSSIDErrMsg = msg
@@ -696,13 +704,13 @@ func checkOnce() {
 			st.mode = "main"
 			st.failCount = 0
 			st.mainStableSince = nil
-			logf("检测到已连接主网 %q，状态校准为 main", currentSSID)
+			logf("%s", T("log.calibratedMain", currentSSID))
 			updateTray("main")
 		} else if cfg.BackupSSID != "" && strings.EqualFold(currentSSID, cfg.BackupSSID) && st.mode != "backup" {
 			st.mode = "backup"
 			st.failCount = 0
 			st.mainStableSince = nil
-			logf("检测到已连接备用网 %q，状态校准为 backup", currentSSID)
+			logf("%s", T("log.calibratedBackup", currentSSID))
 			updateTray("backup")
 		}
 	}
@@ -721,11 +729,11 @@ func checkOnce() {
 	case "main":
 		if !ok {
 			st.failCount++
-			logf("主网探测失败 (%d/%d)", st.failCount, cfg.FailThreshold)
+			logf("%s", T("log.mainProbeFail", st.failCount, cfg.FailThreshold))
 			if st.failCount >= cfg.FailThreshold {
-				logf("主网连续失败，切换到备用")
+				logf("%s", T("log.mainFailSwitch"))
 				if e := connectWithRetry(ctrl, cfg.BackupSSID, 2); e != nil {
-					logf("切换备用失败: %v", e)
+					logf("%s", T("log.switchBackupErr", e))
 				} else {
 					st.mode = "backup"
 					st.failCount = 0
@@ -740,11 +748,11 @@ func checkOnce() {
 			if st.mainStableSince == nil {
 				now := time.Now()
 				st.mainStableSince = &now
-				logf("主网恢复，开始冷却计时 (%d 秒)", cfg.RecoverWait)
+				logf("%s", T("log.mainRecovered", cfg.RecoverWait))
 			} else if time.Since(*st.mainStableSince) >= time.Duration(cfg.RecoverWait)*time.Second {
-				logf("主网已稳定，回切主网")
+				logf("%s", T("log.mainStable"))
 				if e := connectWithRetry(ctrl, cfg.MainSSID, 2); e != nil {
-					logf("回切主网失败: %v", e)
+					logf("%s", T("log.switchMainErr", e))
 				} else {
 					st.mode = "main"
 					st.mainStableSince = nil
@@ -763,15 +771,20 @@ func checkOnce() {
 
 func main() {
 	cfg = loadConfig()
+	if cfg.Lang == "" {
+		cfg.Lang = systemLanguage()
+	}
+	setLang(cfg.Lang)
 	ctrl = pickController()
 
 	a := app.NewWithID("com.hoo.wifiautoswitch")
 	a.Settings().SetTheme(newUITheme())
 	a.SetIcon(fyne.NewStaticResource("icon", iconAppBytes))
-	w := a.NewWindow("WiFi 自动切换")
+	w := a.NewWindow(T("app.title"))
 	// 高度必须小于屏幕可用高度（1080p@125% 时约 826 逻辑像素），否则底部操作栏会被顶出屏幕
 	w.Resize(fyne.NewSize(660, 640))
 	w.CenterOnScreen()
+	onLangChange(func() { w.SetTitle(T("app.title")) })
 
 	// ---------- 顶部状态横幅 ----------
 	banner, bannerObj := newStatusBanner()
@@ -784,9 +797,11 @@ func main() {
 		}
 	}
 	ssidMain := widget.NewSelect(initialOpts, nil)
-	ssidMain.PlaceHolder = "选择主用 Wi-Fi"
+	ssidMain.PlaceHolder = T("ph.main")
+	onLangChange(func() { ssidMain.PlaceHolder = T("ph.main"); ssidMain.Refresh() })
 	ssidBak := widget.NewSelect(initialOpts, nil)
-	ssidBak.PlaceHolder = "选择备用 Wi-Fi"
+	ssidBak.PlaceHolder = T("ph.backup")
+	onLangChange(func() { ssidBak.PlaceHolder = T("ph.backup"); ssidBak.Refresh() })
 	if cfg.MainSSID != "" {
 		ssidMain.SetSelected(cfg.MainSSID)
 	}
@@ -796,13 +811,16 @@ func main() {
 
 	interval := widget.NewEntry()
 	interval.SetText(strconv.Itoa(cfg.CheckInterval))
-	interval.SetPlaceHolder("秒")
+	interval.SetPlaceHolder(T("ph.sec"))
+	onLangChange(func() { interval.SetPlaceHolder(T("ph.sec")) })
 	thresh := widget.NewEntry()
 	thresh.SetText(strconv.Itoa(cfg.FailThreshold))
-	thresh.SetPlaceHolder("次")
+	thresh.SetPlaceHolder(T("ph.times"))
+	onLangChange(func() { thresh.SetPlaceHolder(T("ph.times")) })
 	recover := widget.NewEntry()
 	recover.SetText(strconv.Itoa(cfg.RecoverWait))
-	recover.SetPlaceHolder("秒")
+	recover.SetPlaceHolder(T("ph.sec"))
+	onLangChange(func() { recover.SetPlaceHolder(T("ph.sec")) })
 
 	// 日志区：用 Label 而不是 Disable 的 Entry。
 	// Disable 的 Entry 会把文字画成「禁用灰」(ColorNameDisabled)，日志几乎看不清；
@@ -836,21 +854,22 @@ func main() {
 
 	// ---------- 手动切换（按钮与托盘菜单共用） ----------
 	switchTo := func(mode string) {
-		target, label := cfg.MainSSID, "主用"
+		target, labelKey := cfg.MainSSID, "mode.main"
 		if mode == "backup" {
-			target, label = cfg.BackupSSID, "备用"
+			target, labelKey = cfg.BackupSSID, "mode.backup"
 		}
+		label := T(labelKey)
 		if target == "" {
-			logf("未配置%s Wi-Fi，无法切换", label)
-			pushStatus(func(s *uiStatus) { s.Note = "未配置" + label + " Wi-Fi：请先在上方选择并保存" })
+			logf("%s", T("log.notConfigured", label))
+			pushStatus(func(s *uiStatus) { s.Note = T("note.notConfigured", label) })
 			return
 		}
-		logf("手动切%s：%s", label, target)
-		pushStatus(func(s *uiStatus) { s.Note = "正在切换到" + label + "：" + target })
+		logf("%s", T("log.manualSwitch", label, target))
+		pushStatus(func(s *uiStatus) { s.Note = T("note.switching", label, target) })
 		go func() {
 			if err := connectWithRetry(ctrl, target, 2); err != nil {
-				logf("切%s失败: %v", label, err)
-				pushStatus(func(s *uiStatus) { s.Note = "切" + label + "失败：" + err.Error() })
+				logf("%s", T("log.switchFailed", label, err))
+				pushStatus(func(s *uiStatus) { s.Note = T("note.switchFailed", label, err) })
 				return
 			}
 			st.mu.Lock()
@@ -859,13 +878,13 @@ func main() {
 			st.mainStableSince = nil
 			st.mu.Unlock()
 			updateTray(mode)
-			logf("已切到%s（%s）", label, target)
+			logf("%s", T("log.switchedTo", label, target))
 			pushStatus(func(s *uiStatus) { s.Mode = mode; s.SSID = target; s.Note = "" })
 		}()
 	}
 
 	// ---------- 底部操作栏按钮 ----------
-	saveBtn := widget.NewButtonWithIcon("保存配置", theme.DocumentSaveIcon(), func() {
+	saveBtn := buttonT("btn.save", theme.DocumentSaveIcon(), func() {
 		c := cfg
 		c.MainSSID = ssidMain.Selected
 		c.BackupSSID = ssidBak.Selected
@@ -879,11 +898,11 @@ func main() {
 		setInt(recover.Text, &c.RecoverWait, 0)
 
 		if c.MainSSID == "" {
-			dialog.ShowError(fmt.Errorf("请先选择「主用 Wi-Fi」"), w)
+			dialog.ShowError(Terr("err.needMain"), w)
 			return
 		}
 		if c.BackupSSID != "" && c.MainSSID == c.BackupSSID {
-			dialog.ShowError(fmt.Errorf("主用与备用不能是同一个网络"), w)
+			dialog.ShowError(Terr("err.sameSSID"), w)
 			return
 		}
 		if err := saveConfig(c); err != nil {
@@ -895,30 +914,40 @@ func main() {
 		interval.SetText(strconv.Itoa(c.CheckInterval))
 		thresh.SetText(strconv.Itoa(c.FailThreshold))
 		recover.SetText(strconv.Itoa(c.RecoverWait))
-		logf("配置已保存：主用=%q 备用=%q 间隔=%ds 阈值=%d 冷却=%ds",
-			c.MainSSID, c.BackupSSID, c.CheckInterval, c.FailThreshold, c.RecoverWait)
-		pushStatus(func(s *uiStatus) { s.Note = "配置已保存，新参数已生效" })
+		logf("%s", T("log.saved", c.MainSSID, c.BackupSSID, c.CheckInterval, c.FailThreshold, c.RecoverWait))
+		pushStatus(func(s *uiStatus) { s.Note = T("note.saved") })
 	})
 	saveBtn.Importance = widget.HighImportance
 
-	manMain := widget.NewButtonWithIcon("切到主用", theme.HomeIcon(), func() { switchTo("main") })
-	manBak := widget.NewButtonWithIcon("切到备用", theme.MediaSkipNextIcon(), func() { switchTo("backup") })
+	manMain := buttonT("btn.toMain", theme.HomeIcon(), func() { switchTo("main") })
+	manBak := buttonT("btn.toBackup", theme.MediaSkipNextIcon(), func() { switchTo("backup") })
 
-	pauseBtn := widget.NewButtonWithIcon("暂停监控", theme.MediaPauseIcon(), nil)
+	pauseBtn := widget.NewButtonWithIcon(T("btn.pause"), theme.MediaPauseIcon(), nil)
 	pauseBtn.Importance = widget.LowImportance
+	// 按钮文案同时取决于「暂停状态」和「界面语言」，单独抽一个刷新函数
+	refreshPauseBtn := func() {
+		st.mu.Lock()
+		paused := st.paused
+		st.mu.Unlock()
+		if paused {
+			pauseBtn.SetText(T("btn.resume"))
+			pauseBtn.SetIcon(theme.MediaPlayIcon())
+		} else {
+			pauseBtn.SetText(T("btn.pause"))
+			pauseBtn.SetIcon(theme.MediaPauseIcon())
+		}
+	}
+	onLangChange(refreshPauseBtn)
 	pauseBtn.OnTapped = func() {
 		st.mu.Lock()
 		st.paused = !st.paused
 		paused := st.paused
 		st.mu.Unlock()
+		refreshPauseBtn()
 		if paused {
-			pauseBtn.SetText("继续监控")
-			pauseBtn.SetIcon(theme.MediaPlayIcon())
-			logf("已暂停自动切换（不再自动切网，仍持续探测）")
+			logf("%s", T("log.paused"))
 		} else {
-			pauseBtn.SetText("暂停监控")
-			pauseBtn.SetIcon(theme.MediaPauseIcon())
-			logf("已恢复自动切换")
+			logf("%s", T("log.resumed"))
 		}
 	}
 
@@ -926,8 +955,8 @@ func main() {
 	doScan := func() {
 		list, err := scanSSIDs()
 		if err != nil {
-			logf("扫描网络失败: %v", err)
-			pushStatus(func(s *uiStatus) { s.Note = "扫描失败：" + err.Error() })
+			logf("%s", T("log.scanFail", err))
+			pushStatus(func(s *uiStatus) { s.Note = T("note.scanFailed", err) })
 			return
 		}
 		// 保留已保存的 SSID（即使本次未扫到，例如隐藏网络），追加到列表末尾
@@ -945,37 +974,60 @@ func main() {
 		if cfg.BackupSSID != "" {
 			ssidBak.SetSelected(cfg.BackupSSID)
 		}
-		logf("已加载 %d 个网络（附近扫描或已保存配置）", len(list))
+		logf("%s", T("log.scanDone", len(list)))
 		pushStatus(func(s *uiStatus) {
-			s.Note = fmt.Sprintf("已加载 %d 个网络，选择主用/备用后点「保存配置」", len(list))
+			s.Note = T("note.scanDone", len(list))
 		})
 	}
 	var scanBtn *widget.Button
-	scanBtn = widget.NewButtonWithIcon("重新扫描", theme.ViewRefreshIcon(), func() {
+	scanBtn = buttonT("btn.rescan", theme.ViewRefreshIcon(), nil)
+	scanBtn.OnTapped = func() {
 		scanBtn.Disable()
-		scanBtn.SetText("扫描中…")
+		scanBtn.SetText(T("btn.scanning")) // 扫描中不再跟随语言刷新，避免覆盖掉「扫描中…」
 		go func() {
 			doScan()
-			scanBtn.SetText("重新扫描")
+			scanBtn.SetText(T("btn.rescan"))
 			scanBtn.Enable()
 		}()
-	})
+	}
 
 	// 日志是 Label，不能拖选，所以给一个「复制全部日志」按钮
 	copyLogBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		w.Clipboard().SetContent(logLabel.Text)
-		logf("日志已复制到剪贴板")
+		logf("%s", T("log.copied"))
 	})
 	copyLogBtn.Importance = widget.LowImportance
 
 	clearLogBtn := widget.NewButtonWithIcon("", theme.ContentClearIcon(), func() { logLabel.SetText("") })
 	clearLogBtn.Importance = widget.LowImportance
 
+	// ---------- 语言切换 ----------
+	// 按钮上显示的是「切过去的语言」：中文界面显示 EN，英文界面显示「中文」
+	langBtn := widget.NewButton(T("btn.lang"), nil)
+	langBtn.Importance = widget.LowImportance
+	langBtn.OnTapped = func() {
+		next := LangEN
+		if lang() == LangEN {
+			next = LangZH
+		}
+		setLang(next)
+		cfg.Lang = next // 语言选择跟着配置一起持久化
+		if err := saveConfig(cfg); err != nil {
+			logf("%v", err)
+		}
+		refreshLang()
+		banner.apply(currentStatus())
+		// 英文文案普遍更长，重新布局一遍，避免按钮/标签还停在旧尺寸上
+		w.Content().Refresh()
+		logf("%s", T("log.langSwitched"))
+	}
+	onLangChange(func() { langBtn.SetText(T("btn.lang")) })
+
 	// ---------- 布局 ----------
 	cardNet := newNetworkCard(ssidMain, ssidBak, scanBtn)
 	cardPolicy := newPolicyCard(interval, thresh, recover)
 	cardLog := newLogCard(logScroll, copyLogBtn, clearLogBtn)
-	actionBar := newActionBar(saveBtn, manMain, manBak, pauseBtn)
+	actionBar := newActionBar(saveBtn, manMain, manBak, pauseBtn, langBtn)
 
 	w.SetContent(assembleRoot(bannerObj, cardNet, cardPolicy, cardLog, actionBar))
 
@@ -987,21 +1039,25 @@ func main() {
 	// ---------- 系统托盘（Windows / macOS） ----------
 	if d, ok := a.(desktop.App); ok {
 		desk = d
-		menu := fyne.NewMenu("WiFi 切换",
-			fyne.NewMenuItem("打开设置", func() { w.Show() }),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("切到主用 Wi-Fi", func() { go switchTo("main") }),
-			fyne.NewMenuItem("切到备用 Wi-Fi", func() { go switchTo("backup") }),
-			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("退出", func() {
-				st.mu.Lock()
-				st.running = false
-				st.mu.Unlock()
-				a.Quit()
-			}),
-		)
-		d.SetSystemTrayMenu(menu)
+		buildMenu := func() *fyne.Menu {
+			return fyne.NewMenu(T("app.tray"),
+				fyne.NewMenuItem(T("tray.open"), func() { w.Show() }),
+				fyne.NewMenuItemSeparator(),
+				fyne.NewMenuItem(T("tray.toMain"), func() { go switchTo("main") }),
+				fyne.NewMenuItem(T("tray.toBackup"), func() { go switchTo("backup") }),
+				fyne.NewMenuItemSeparator(),
+				fyne.NewMenuItem(T("tray.quit"), func() {
+					st.mu.Lock()
+					st.running = false
+					st.mu.Unlock()
+					a.Quit()
+				}),
+			)
+		}
+		d.SetSystemTrayMenu(buildMenu())
 		d.SetSystemTrayIcon(trayResource(st.mode))
+		// 系统托盘的菜单文字不会自己刷新，语言变了要整份重建
+		onLangChange(func() { d.SetSystemTrayMenu(buildMenu()) })
 	}
 
 	// 启动后自动扫描一次可用网络，填充下拉框

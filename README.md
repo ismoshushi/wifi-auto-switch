@@ -16,6 +16,10 @@ Windows / macOS · Go + [Fyne](https://fyne.io) · MIT License
 
 ![切换到备用后](docs/screenshot-backup.png)
 
+英文界面（同一次运行内切换，无需重启）：
+
+![English UI](docs/screenshot-en-main.png)
+
 ## 功能
 
 - **托盘常驻**（Windows / macOS），关闭窗口 = 最小化到托盘，托盘图标随状态变色（主网=绿，备用=橙），菜单里可直接切主用/备用
@@ -26,6 +30,7 @@ Windows / macOS · Go + [Fyne](https://fyne.io) · MIT License
 - **切换结果以实际关联为准**：连接后轮询当前 SSID 最多 20 秒，只有真的关联上才算成功，不会出现「假成功」
 - **平台分离**：Windows 走原生 `WlanConnect`（netsh 兜底）；macOS 走 `airport` + `networksetup`，网卡自动探测（不硬编码 `en0`）
 - **不打扰**：子进程全部隐藏窗口，不会周期性闪黑窗或弹 PowerShell；窗口尺寸适配 1080p + 125% 缩放
+- **中英文界面**：右下角一键切换（中文界面显示 `EN`，英文界面显示 `中文`），首次启动按系统语言自动选择，选择会记进配置
 - 配置持久化到 `config.json`，运行日志同时显示在窗口内并写入 `wifi-autoswitch.log`
 
 ## 快速开始
@@ -74,6 +79,7 @@ fyne package -os darwin -arch arm64 -icon assets/icon.png -name "WiFiAutoSwitch"
 | `recover_wait_sec` | 主网稳定多久后回切（秒，即防乒乓冷却） | 60 |
 | `ping_target` | ping 探测目标 | 223.5.5.5 |
 | `http_target` | HTTP 探测目标 | http://1.1.1.1 |
+| `lang` | 界面语言：`zh` / `en`（缺省按系统语言判断） | 系统语言 |
 
 改完「检测间隔」等参数并保存后**立即生效**，不用重启。
 
@@ -132,6 +138,17 @@ go run ./wlanprobe connect <SSID>    # 用原生 WlanConnect 切网
 2. **子进程**：程序每轮探测都要调 `ping`、`netsh`、`powershell`（都是控制台程序）。GUI 进程创建控制台子进程时，Windows 默认会给它分配一个**可见**的控制台窗口 —— 每 5 秒闪一个黑窗，走到 PowerShell 兜底时更明显。解决：所有子进程统一走 `proc_windows.go` 的 `hideWindow()`，设置 `SysProcAttr{HideWindow: true, CreationFlags: CREATE_NO_WINDOW}`，窗口根本不会被创建。
 3. **少起进程**：`netsh wlan show interfaces` 在位置服务受限的机器上必然失败，失败后静默 90 秒不再调用，期间只走 PowerShell（本身有 8 秒缓存）。
 
+### 中英文是怎么做的
+
+没有引入 `golang.org/x/text` 之类的 i18n 框架，一套 map 加一次注册就够：
+
+- `i18n.go` 是一张文案表 `map[key]{zh, en}`，`T("key", args...)` 按当前语言取值并按 `fmt` 填占位符；`Terr()` 返回已翻译的 `error`。
+- **不重建界面**。控件创建时用 `textT()` / `buttonT()` 包一层，同时把「怎么把新文案写回这个控件」注册进队列；切语言时只跑一遍队列（`refreshLang()`）再 `Refresh()` 一次布局。日志内容、滚动位置、输入框里没保存的编辑都不会丢。
+- 需要额外处理的只有三处：下拉框占位符（`PlaceHolder` 不会自动刷新）、暂停按钮（文案同时取决于暂停状态）、系统托盘菜单（整份重建）。
+- 语言存在 `config.json` 的 `lang` 字段；缺省时 Windows 读 `GetUserDefaultUILanguage`，macOS 读 `LANG`。
+- 历史日志保持写入时的语言（它是运行记录，不是界面），新产生的日志跟随当前语言。
+- `go test -run TestCatalogCoverage` 会检查：每条文案中英都不缺、两版占位符数量一致、代码里用到的 key 都真实存在。
+
 ### 界面为什么这么排
 
 Fyne 的原生控件堆一列很容易散，这里做了几件事：
@@ -147,6 +164,9 @@ Fyne 的原生控件堆一列很容易散，这里做了几件事：
 ```
 wifi-auto-switch/
 ├─ main.go              # 主程序：窗口 / 托盘 / 状态机 / 控制器 / 探测
+├─ i18n.go              # 中英文文案表 + 语言状态 + 切换后重刷控件
+├─ lang_windows.go      # 系统语言探测（GetUserDefaultUILanguage），Windows
+├─ lang_other.go        # 同上，按 LANG 环境变量
 ├─ theme.go             # 自定义主题：字号 / 间距 / 配色 + 加载系统中文字体
 ├─ ui.go                # 视觉组件：圆角卡片、字段行、状态胶囊、整体组装
 ├─ proc_windows.go      # 子进程隐藏窗口（CREATE_NO_WINDOW），Windows 实现
@@ -167,7 +187,7 @@ wifi-auto-switch/
 - Windows 上切网要求目标是**已保存过的** Wi‑Fi profile；从没连过的开放网络需要先手动连一次。
 - macOS 托盘图标目前是彩色 PNG，可改为模板图以更好适配深色菜单栏。
 - 多 Wi‑Fi 网卡场景未专门处理（取首个带 SSID 的接口）。
-- 界面文字为简体中文；如需其他语言，欢迎提 PR（Fyne 的 i18n 尚未接入）。
+- 目前只提供简体中文与英文两套界面；新增语言需要补一张文案表（`i18n.go` 的 `msg` 加一列），欢迎提 PR。
 
 ## 贡献
 

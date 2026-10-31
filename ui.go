@@ -39,14 +39,26 @@ func textC(s string, size float32, c color.Color, bold bool) *canvas.Text {
 	return t
 }
 
-// caption 字段小标题：小号灰字，放在控件上方。
-func caption(s string) fyne.CanvasObject {
-	return textC(s, fsLabel, cFgMuted, false)
+// textT 同上，但传入的是文案 key，并登记到语言切换队列里。
+func textT(key string, size float32, c color.Color, bold bool) *canvas.Text {
+	t := textC(T(key), size, c, bold)
+	onLangChange(func() {
+		t.Text = T(key)
+		t.Refresh()
+	})
+	return t
 }
 
-// fieldRow 一个字段：上面是小标题，下面是控件。
-func fieldRow(label string, ctrl fyne.CanvasObject) fyne.CanvasObject {
-	return container.NewVBox(caption(label), gapY(2), ctrl)
+// buttonT 生成带图标按钮，文字随语言切换自动刷新。
+func buttonT(key string, icon fyne.Resource, tapped func()) *widget.Button {
+	var b *widget.Button
+	if icon != nil {
+		b = widget.NewButtonWithIcon(T(key), icon, tapped)
+	} else {
+		b = widget.NewButton(T(key), tapped)
+	}
+	onLangChange(func() { b.SetText(T(key)) })
+	return b
 }
 
 // divider 1px 浅色分隔线（不用 widget.Separator，颜色更可控）。
@@ -65,16 +77,21 @@ func cardBg() *canvas.Rectangle {
 	return bg
 }
 
+// fieldRow 一个字段：上面是小标题（key），下面是控件。
+func fieldRow(labelKey string, ctrl fyne.CanvasObject) fyne.CanvasObject {
+	return container.NewVBox(textT(labelKey, fsLabel, cFgMuted, false), gapY(2), ctrl)
+}
+
 // sectionCard 圆角白卡片：标题 + 副标题 + 内容，自带内边距与描边。
-func sectionCard(title, subtitle string, body fyne.CanvasObject) fyne.CanvasObject {
-	return sectionCardAction(title, subtitle, nil, body)
+func sectionCard(titleKey, subtitleKey string, body fyne.CanvasObject) fyne.CanvasObject {
+	return sectionCardAction(titleKey, subtitleKey, nil, body)
 }
 
 // sectionCardAction 同上，但可在标题行右侧放一个操作按钮（如「重新扫描」）。
-func sectionCardAction(title, subtitle string, action fyne.CanvasObject, body fyne.CanvasObject) fyne.CanvasObject {
-	head := container.NewVBox(textC(title, fsCardTitle, cFg, true))
-	if subtitle != "" {
-		head.Add(textC(subtitle, fsLabel, cFgMuted, false))
+func sectionCardAction(titleKey, subtitleKey string, action fyne.CanvasObject, body fyne.CanvasObject) fyne.CanvasObject {
+	head := container.NewVBox(textT(titleKey, fsCardTitle, cFg, true))
+	if subtitleKey != "" {
+		head.Add(textT(subtitleKey, fsLabel, cFgMuted, false))
 	}
 	header := head
 	if action != nil {
@@ -90,28 +107,28 @@ func sectionCardAction(title, subtitle string, action fyne.CanvasObject, body fy
 func newNetworkCard(ssidMain, ssidBak *widget.Select, scanBtn *widget.Button) fyne.CanvasObject {
 	// 两个下拉并排，避免上下堆叠把卡片撑得过高
 	grid := container.NewGridWithColumns(2,
-		fieldRow("主用 Wi-Fi", ssidMain),
-		fieldRow("备用 Wi-Fi", ssidBak),
+		fieldRow("field.main", ssidMain),
+		fieldRow("field.backup", ssidBak),
 	)
-	return sectionCardAction("网络", "列表来自附近网络与已保存的网络", scanBtn,
+	return sectionCardAction("card.network.title", "card.network.subtitle", scanBtn,
 		container.NewVBox(grid))
 }
 
 func newPolicyCard(interval, thresh, recover *widget.Entry) fyne.CanvasObject {
 	grid := container.NewGridWithColumns(3,
-		fieldRow("检测间隔（秒）", interval),
-		fieldRow("失败阈值（次）", thresh),
-		fieldRow("回切冷却（秒）", recover),
+		fieldRow("field.interval", interval),
+		fieldRow("field.threshold", thresh),
+		fieldRow("field.cooldown", recover),
 	)
-	return sectionCard("切换策略", "连续失败达到阈值才切备用；主用稳定超过冷却时间才回切，避免来回乒乓",
+	return sectionCard("card.policy.title", "card.policy.subtitle",
 		container.NewVBox(grid))
 }
 
 func newLogCard(logView fyne.CanvasObject, copyBtn, clearBtn *widget.Button) fyne.CanvasObject {
 	head := container.NewHBox(
-		textC("运行日志", fsCardTitle, cFg, true),
+		textT("card.log.title", fsCardTitle, cFg, true),
 		layout.NewSpacer(),
-		textC("最近 400 条", fsTiny, cFgFaint, false),
+		textT("card.log.count", fsTiny, cFgFaint, false),
 		copyBtn,
 		clearBtn,
 	)
@@ -127,8 +144,8 @@ func newLogCard(logView fyne.CanvasObject, copyBtn, clearBtn *widget.Button) fyn
 		pad(container.NewBorder(head, nil, nil, nil, body), 9, 9, 11, 11))
 }
 
-func newActionBar(saveBtn, manMain, manBak, pauseBtn *widget.Button) fyne.CanvasObject {
-	row := container.NewHBox(saveBtn, manMain, manBak, layout.NewSpacer(), pauseBtn)
+func newActionBar(saveBtn, manMain, manBak, pauseBtn, langBtn *widget.Button) fyne.CanvasObject {
+	row := container.NewHBox(saveBtn, manMain, manBak, layout.NewSpacer(), langBtn, pauseBtn)
 	return container.NewVBox(divider(), pad(row, 8, 6, 14, 14))
 }
 
