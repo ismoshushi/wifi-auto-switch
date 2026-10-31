@@ -40,7 +40,7 @@ Windows / macOS · Go + [Fyne](https://fyne.io) · MIT License
 需要 Go ≥ 1.22 和 CGO 工具链（Windows：MinGW‑w64 的 gcc；macOS：Xcode Command Line Tools）。
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/ismoshushi/wifi-auto-switch.git
 cd wifi-auto-switch
 go mod tidy
 
