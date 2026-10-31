@@ -1,0 +1,25 @@
+# ---- 构建产物 ----
+*.exe
+*.syso
+*.app
+/WiFiAutoSwitch
+/dist/
+/build/
+*.dmg
+*.zip
+
+# ---- 运行时文件（含本机 Wi-Fi 名，不要提交）----
+config.json
+wifi-autoswitch.log
+*.log
+
+# ---- 本地截图 / 临时文件 ----
+preview_*.png
+build.log
+*.tmp
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

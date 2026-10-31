@@ -1,0 +1,9 @@
+{
+  "main_ssid": "Home-WiFi",
+  "backup_ssid": "Home-WiFi-5G",
+  "check_interval_sec": 5,
+  "fail_threshold": 3,
+  "recover_wait_sec": 60,
+  "ping_target": "223.5.5.5",
+  "http_target": "http://1.1.1.1"
+}
