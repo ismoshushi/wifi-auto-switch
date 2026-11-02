@@ -33,6 +33,11 @@ Windows / macOS · Go + [Fyne](https://fyne.io) · MIT License
 - **中英文界面**：右下角一键切换（中文界面显示 `EN`，英文界面显示 `中文`），首次启动按系统语言自动选择，选择会记进配置
 - 配置持久化到 `config.json`，运行日志同时显示在窗口内并写入 `wifi-autoswitch.log`
 
+## 下载预编译版本
+
+不想自己编译？去 **[Releases](https://github.com/ismoshushi/wifi-auto-switch/releases)** 页面下载 `WiFiAutoSwitch.exe`（Windows）即可——单文件、双击运行、无需安装。
+每次发版（`v*` 标签）都会由 GitHub Actions 自动编译并把最新 exe 挂到 Release 上。
+
 ## 快速开始
 
 ### 从源码构建

@@ -1,0 +1,62 @@
+name: Build & Release Windows
+
+# 打 `v*` 标签（或手动触发）时，自动在 Windows runner 上编译 exe 并挂到 GitHub Release。
+# 之后每次发版只要：`git tag v1.0.1 && git push origin v1.0.1` 即可。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows exe
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Set up MinGW-w64 (Fyne 需要 CGO)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          CC: 'C:/msys64/mingw64/bin/gcc.exe'
+        run: |
+          export PATH="/c/msys64/mingw64/bin:$PATH"
+          go build -ldflags="-H windowsgui -s -w" -o WiFiAutoSwitch.exe .
+
+      - name: Verify GUI subsystem (no console window)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import struct
+          data = open("WiFiAutoSwitch.exe", "rb").read()
+          e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+          subsystem = struct.unpack_from("<H", data, e_lfanew + 0x18 + 0x44)[0]
+          print("PE subsystem =", subsystem)
+          assert subsystem == 2, "期望 GUI 子系统(2)，否则双击会弹黑框"
+          print("OK: 确认是 GUI 子系统，双击不会弹命令行窗口")
+          PY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: WiFiAutoSwitch.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
