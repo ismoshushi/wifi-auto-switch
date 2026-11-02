@@ -43,6 +43,8 @@ jobs:
 
       - name: Verify GUI subsystem (no console window)
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python3 - <<'PY'
           import struct
@@ -50,8 +52,8 @@ jobs:
           e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
           subsystem = struct.unpack_from("<H", data, e_lfanew + 0x18 + 0x44)[0]
           print("PE subsystem =", subsystem)
-          assert subsystem == 2, "期望 GUI 子系统(2)，否则双击会弹黑框"
-          print("OK: 确认是 GUI 子系统，双击不会弹命令行窗口")
+          assert subsystem == 2, "expected GUI subsystem (2); otherwise a console window pops up on launch"
+          print("OK: confirmed GUI subsystem, no console window on launch")
           PY
 
       - name: Create GitHub Release
